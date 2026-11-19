@@ -1,153 +1,143 @@
-// missions.js — the courier work that pays Rook's debt.
-//
-// The Marlin Crew does not care how the packages move, only that they
-// move: a gold beacon marks a pickup, a green one the drop, and a
-// countdown prices the run by distance. Chain deliveries back to back and
-// the bonus grows; let the clock die and the chain resets. Between jobs,
-// loose cash pickups glint on the sidewalks — twenty-five dollars a time,
-// no questions asked, which is very Port Azura.
+// The job chain Marlo works to pay the Marlin Crew, plus endless courier
+// jobs in free roam. A beacon (a pillar of light) marks the current target;
+// the missions object reports through the game facade: addCash, toast,
+// setHeatAtLeast, setDecayBoost, playSound.
 
 import * as THREE from 'three';
-import { intersectionNear, randomStreetPoint } from './city.js';
-import { rand, rng } from './rng.js';
+import { PITCH } from './city.js';
+import { dist2d } from './rng.js';
 
-const PICKUP_COLOR = 0xffd94a;
-const DROP_COLOR = 0x3aff7a;
+const SPOTS = {
+  pickup1: { x: PITCH, z: -2 * PITCH },
+  parcel: { x: -2 * PITCH, z: PITCH },
+  dropoff: { x: 2 * PITCH, z: 2 * PITCH },
+  hideout: { x: -2 * PITCH, z: -3 * PITCH },
+};
+const JOB_SPOTS = [
+  { x: 3 * PITCH, z: 0 }, { x: -3 * PITCH, z: PITCH }, { x: 0, z: 3 * PITCH },
+  { x: PITCH, z: -3 * PITCH }, { x: -PITCH, z: -2 * PITCH }, { x: 2 * PITCH, z: -PITCH },
+  { x: -2 * PITCH, z: 2 * PITCH }, { x: 3 * PITCH, z: 3 * PITCH },
+];
 
-function makeBeacon(color) {
-  const group = new THREE.Group();
-  const beam = new THREE.Mesh(
-    new THREE.CylinderGeometry(2.3, 2.3, 30, 20, 1, true),
-    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.26, side: THREE.DoubleSide, depthWrite: false }),
-  );
-  beam.position.y = 15;
-  const ring = new THREE.Mesh(
-    new THREE.TorusGeometry(2.3, 0.14, 8, 32),
-    new THREE.MeshBasicMaterial({ color }),
-  );
-  ring.rotation.x = Math.PI / 2;
-  ring.position.y = 0.25;
-  group.add(beam, ring);
-  group.userData = { beam, ring };
-  return group;
-}
-
-function makeCashMesh() {
-  const mesh = new THREE.Mesh(
-    new THREE.BoxGeometry(0.9, 0.5, 0.06),
-    new THREE.MeshBasicMaterial({ color: 0x51ff7a }),
-  );
-  return mesh;
-}
-
-export class MissionSystem {
+export class Missions {
   constructor(scene) {
     this.scene = scene;
-    this.state = 'offer'; // offer -> deliver -> offer ...
-    this.chain = 0;
-    this.timeLeft = 0;
-    this.timeTotal = 0;
-    this.reward = 0;
-    this.pickup = randomStreetPoint();
-    this.drop = null;
-    this.beacon = makeBeacon(PICKUP_COLOR);
-    this.beacon.position.set(this.pickup.x, 0, this.pickup.z);
+    // Beacon visuals: translucent pillar + ground ring.
+    this.beacon = new THREE.Group();
+    const pillar = new THREE.Mesh(
+      new THREE.CylinderGeometry(2.2, 2.2, 26, 12, 1, true),
+      new THREE.MeshBasicMaterial({ color: 0xffd94d, transparent: true, opacity: 0.3, side: THREE.DoubleSide, depthWrite: false }),
+    );
+    pillar.position.y = 13;
+    const ring = new THREE.Mesh(
+      new THREE.RingGeometry(2.6, 3.4, 24),
+      new THREE.MeshBasicMaterial({ color: 0xffd94d, transparent: true, opacity: 0.85, side: THREE.DoubleSide }),
+    );
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.y = 0.15;
+    this.beacon.add(pillar, ring);
+    this.beacon.visible = false;
     scene.add(this.beacon);
-    // Loose cash scattered on the streets.
-    this.cashPickups = [];
-    for (let i = 0; i < 12; i++) {
-      const p = randomStreetPoint();
-      const mesh = makeCashMesh();
-      mesh.position.set(p.x + rand(-4, 4), 1, p.z + rand(-4, 4));
-      scene.add(mesh);
-      this.cashPickups.push({ mesh, x: mesh.position.x, z: mesh.position.z });
-    }
-    this.time = 0;
-    // Set by main.js: onPickup(), onDeliver(reward), onFail().
-    this.onPickup = null;
-    this.onDeliver = null;
-    this.onFail = null;
+    this.reset();
   }
 
-  /** The beacon's current target and what the HUD should say. */
-  target() {
-    return this.state === 'offer' ? this.pickup : this.drop;
+  reset() {
+    this.step = 0;          // 0 pickup, 1 delivery, 2 lay low, 3 free-roam jobs
+    this.phase = 'go';      // within delivery: 'fetch' then 'deliver'
+    this.timer = -1;        // seconds left, -1 = no timer
+    this.target = SPOTS.pickup1;
+    this.jobIndex = 0;
+    this.chainTime = 0;
+    this.chainDone = false;
+    this.insideHideout = false;
+    this.setBeacon(this.target, 0xffd94d);
   }
 
-  /** Start the delivery leg from the pickup point to a fresh drop. */
-  beginDelivery() {
-    let drop = null;
-    for (let tries = 0; tries < 10; tries++) {
-      const cand = intersectionNear(this.pickup.x, this.pickup.z, 150, 330);
-      const d = Math.hypot(cand.x - this.pickup.x, cand.z - this.pickup.z);
-      if (d > 130) {
-        drop = cand;
-        break;
-      }
-      drop = cand;
-    }
-    this.drop = drop;
-    const dist = Math.hypot(drop.x - this.pickup.x, drop.z - this.pickup.z);
-    this.timeTotal = this.timeLeft = Math.min(95, Math.max(30, dist / 8.5 + 18));
-    this.reward = Math.round(50 + dist * 0.55);
-    this.state = 'deliver';
-    this.beacon.userData.beam.material.color.setHex(DROP_COLOR);
-    this.beacon.userData.ring.material.color.setHex(DROP_COLOR);
-    this.beacon.position.set(drop.x, 0, drop.z);
+  setBeacon(spot, color) {
+    this.target = spot;
+    this.beacon.position.set(spot.x, 0, spot.z);
+    this.beacon.visible = true;
+    for (const child of this.beacon.children) child.material.color.setHex(color);
   }
 
-  /** Back to offering a pickup, near where the last run ended. */
-  nextOffer(near) {
-    this.state = 'offer';
-    this.pickup = intersectionNear(near.x, near.z, 40, 190);
-    this.beacon.userData.beam.material.color.setHex(PICKUP_COLOR);
-    this.beacon.userData.ring.material.color.setHex(PICKUP_COLOR);
-    this.beacon.position.set(this.pickup.x, 0, this.pickup.z);
+  currentObjective() {
+    if (this.step === 0) return { title: 'JOB 1 · FIRST PICKUP', text: 'Reach the gold beacon and grab the package.' };
+    if (this.step === 1 && this.phase === 'fetch') return { title: 'JOB 2 · HOT DELIVERY', text: 'Pick up the parcel across town.' };
+    if (this.step === 1) return { title: 'JOB 2 · HOT DELIVERY', text: 'Deliver the parcel before the clock runs out — the heat is on!' };
+    if (this.step === 2) return { title: 'JOB 3 · LAY LOW', text: this.insideHideout ? 'Stay in the hideout until your wanted level clears.' : 'Reach the hideout and shake the heat.' };
+    return { title: 'COURIER JOB', text: 'Deliver to the beacon for quick cash.' };
   }
 
-  /**
-   * Advance missions and pickups. playerPos is wherever Rook is (on foot
-   * or in a car). Returns the number of cash pickups collected this frame.
-   */
-  update(dt, playerPos) {
-    this.time += dt;
-    const u = this.beacon.userData;
-    u.beam.material.opacity = 0.2 + 0.1 * Math.sin(this.time * 3);
-    u.ring.scale.setScalar(1 + 0.08 * Math.sin(this.time * 3));
+  // game: facade with playerPos, addCash, toast, setHeatAtLeast, setDecayBoost, sound(name), stars()
+  update(dt, game) {
+    const p = game.playerPos;
+    const d = dist2d(p.x, p.z, this.target.x, this.target.z);
+    if (this.step < 3 && !this.chainDone) this.chainTime += dt;
 
-    const t = this.target();
-    if (t && Math.hypot(playerPos.x - t.x, playerPos.z - t.z) < 3.4) {
-      if (this.state === 'offer') {
-        this.beginDelivery();
-        if (this.onPickup) this.onPickup();
-      } else {
-        const reward = this.reward + Math.round(this.timeLeft * 2) + this.chain * 15;
-        this.chain += 1;
-        this.nextOffer(playerPos);
-        if (this.onDeliver) this.onDeliver(reward);
-      }
-    }
-    if (this.state === 'deliver') {
-      this.timeLeft -= dt;
-      if (this.timeLeft <= 0) {
-        this.chain = 0;
-        this.nextOffer(playerPos);
-        if (this.onFail) this.onFail();
+    if (this.timer > 0) {
+      this.timer -= dt;
+      if (this.timer <= 0) {
+        this.timer = -1;
+        if (this.step === 1 && this.phase === 'deliver') {
+          game.toast('TOO SLOW — the deal went cold');
+          game.sound('busted');
+          this.phase = 'fetch';
+          this.setBeacon(SPOTS.parcel, 0xffd94d);
+        }
       }
     }
 
-    let collected = 0;
-    for (const c of this.cashPickups) {
-      c.mesh.rotation.y += dt * 2.4;
-      c.mesh.position.y = 1 + Math.sin(this.time * 2.4 + c.x) * 0.18;
-      if (Math.hypot(playerPos.x - c.x, playerPos.z - c.z) < 2.6) {
-        collected += 1;
-        const p = randomStreetPoint();
-        c.x = p.x + rand(-4, 4);
-        c.z = p.z + rand(-4, 4);
-        c.mesh.position.set(c.x, 1, c.z);
+    if (this.step === 0) {
+      if (d < 6.5) {
+        game.addCash(150);
+        game.toast('PACKAGE SECURED  +$150');
+        game.sound('cash');
+        this.step = 1; this.phase = 'fetch';
+        this.setBeacon(SPOTS.parcel, 0xffd94d);
+      }
+    } else if (this.step === 1 && this.phase === 'fetch') {
+      if (d < 6.5) {
+        game.toast('PARCEL ON BOARD — MOVE!');
+        game.sound('pickup');
+        game.setHeatAtLeast(210); // two stars and change: the pickup was watched
+        this.phase = 'deliver';
+        this.timer = 80;
+        this.setBeacon(SPOTS.dropoff, 0x7dff8a);
+      }
+    } else if (this.step === 1 && this.phase === 'deliver') {
+      if (d < 7) {
+        game.addCash(400);
+        game.toast('DELIVERED  +$400');
+        game.sound('cash');
+        this.timer = -1;
+        this.step = 2;
+        this.setBeacon(SPOTS.hideout, 0x7dff8a);
+      }
+    } else if (this.step === 2) {
+      this.insideHideout = d < 15;
+      game.setDecayBoost(this.insideHideout ? 3.2 : 1);
+      if (this.insideHideout && game.stars() === 0) {
+        game.addCash(600);
+        game.toast('DEBT PAID — PORT AZURA IS YOURS  +$600');
+        game.sound('cash');
+        game.setDecayBoost(1);
+        this.step = 3;
+        this.chainDone = true;
+        this.nextJob(game);
+      }
+    } else if (this.step === 3) {
+      if (d < 7) {
+        game.addCash(120);
+        game.toast('DELIVERED  +$120');
+        game.sound('cash');
+        this.nextJob(game);
       }
     }
-    return collected;
+    return this.timer;
+  }
+
+  nextJob(game) {
+    this.jobIndex = (this.jobIndex + 1) % JOB_SPOTS.length;
+    this.setBeacon(JOB_SPOTS[this.jobIndex], 0xffd94d);
   }
 }

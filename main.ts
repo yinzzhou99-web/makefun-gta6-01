@@ -1,35 +1,40 @@
-// Port Azura Heat — hand-in program.
+// Port Azura Heat — make.fun gta6-01 entrypoint (Node 22, standard library only).
 //
-// Copies the playable game (game/) and its screenshots (screenshots/) from
-// this repository into the output directory, then seals the entry with the
-// kit's own dossier library so dossier.json is byte for byte what the
-// scorer rebuilds from those same files. Standard library only; the output
-// depends only on the repository's files, so two runs write the same bytes.
+// The game itself lives in this directory's game/ folder as plain static files
+// (game/index.html plus its ES modules and the vendored three.js build) that a
+// desktop browser loads fully offline. This program is only the hand-in
+// plumbing: it copies game/ and screenshots/ into the output directory and
+// writes dossier.json there with the vendored make.fun dossier library.
+//
+// The output directory is /output inside the grader's container; anywhere else
+// the MAKEFUN_OUTPUT_DIR environment variable stands in for it:
+//   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
 
-import { cpSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { cpSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildDossier } from './vendor/makefun-game.ts';
 
-const repoRoot = dirname(fileURLToPath(import.meta.url));
-const outDir = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
+const here = fileURLToPath(new URL('.', import.meta.url));
+const out = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
 
-// The gate's caps for this bounty, passed whole so this program refuses
-// exactly where the scorer would.
-const GATE_CAPS = {
+// Copy the playable game and the screenshot set next to the dossier.
+mkdirSync(out, { recursive: true });
+cpSync(join(here, 'game'), join(out, 'game'), { recursive: true });
+mkdirSync(join(out, 'screenshots'), { recursive: true });
+if (existsSync(join(here, 'screenshots'))) {
+  cpSync(join(here, 'screenshots'), join(out, 'screenshots'), { recursive: true });
+}
+
+// The caps below mirror the scorer's own gate (reference/gate.json): text size
+// shapes the dossier bytes, the rest refuse anything the scorer would refuse —
+// too many or too-large screenshots, too many game files, an oversized game
+// tree, or an over-long path under game/.
+const dossier = buildDossier(out, {
   text_max_bytes: 163840,
   screenshots: { max: 4, max_bytes: 262144 },
   game_max_files: 993,
   game_max_bytes: 50331648,
   game_path_max_bytes: 1000,
-} as const;
-
-mkdirSync(outDir, { recursive: true });
-for (const part of ['game', 'screenshots']) {
-  const target = join(outDir, part);
-  rmSync(target, { recursive: true, force: true });
-  cpSync(join(repoRoot, part), target, { recursive: true });
-}
-
-const dossier = buildDossier(outDir, GATE_CAPS);
-writeFileSync(join(outDir, 'dossier.json'), dossier);
+});
+writeFileSync(join(out, 'dossier.json'), dossier);

@@ -1,179 +1,134 @@
-// pedestrians.js — the people of Port Azura.
-//
-// Twenty-four citizens stroll the sidewalks in holiday clothes. They walk
-// corner to corner, they run when a car mounts the kerb or a crime goes
-// off beside them, and they go down when a car or a fist finds them —
-// dropping a little cash and, if anyone is watching, raising the heat.
-// Each one is a handful of boxes with swinging legs; cheap to draw, easy
-// to read at chase-camera distance.
+// Pedestrians: little low-poly walkers looping the sidewalks block by block.
+// They flee gunfire and nearby violence, and if one is hit or shot the game
+// reports it through the hooks so the wanted system can react.
 
 import * as THREE from 'three';
-import { STREET_COORDS, collideCircle } from './city.js';
-import { angleDelta, clamp, pick, rand, rng, turnToward } from './rng.js';
+import { PITCH, ROAD_HALF } from './city.js';
+import { makeRng, clamp } from './rng.js';
 
-const SHIRTS = [0xff5a5a, 0xffd94a, 0x4ac8ff, 0x7fe7a0, 0xff8ac2, 0xf7f3e8, 0xff9f43, 0x54a0ff];
-const SKINS = [0xf2c79b, 0xc68863, 0x8d5524, 0xffdbac, 0x6b4423];
-const PANTS = [0x2e4057, 0xf7f3e8, 0x596275, 0x30336b];
+const SKIN = [0xf2c89b, 0xc98d64, 0x8a5a3b, 0x6e4530];
+const SHIRT = [0xff6b6b, 0x4ecdc4, 0xffe66d, 0x95e06c, 0xf783ac, 0x748ffc, 0xffffff];
 
-function createPedMesh() {
+function makePedMesh(rng) {
   const g = new THREE.Group();
-  const shirt = new THREE.MeshLambertMaterial({ color: pick(SHIRTS) });
-  const skin = new THREE.MeshLambertMaterial({ color: pick(SKINS) });
-  const pants = new THREE.MeshLambertMaterial({ color: pick(PANTS) });
-  const legL = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.78, 0.18), pants);
-  legL.position.set(-0.11, 0.39, 0);
-  const legR = legL.clone();
-  legR.position.x = 0.11;
-  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.72, 0.26), shirt);
-  torso.position.y = 1.14;
-  torso.castShadow = true;
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.21, 10, 8), skin);
+  const body = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.26, 0.34, 1.05, 7),
+    new THREE.MeshLambertMaterial({ color: rng.pick(SHIRT) }),
+  );
+  body.position.y = 0.95;
+  g.add(body);
+  const head = new THREE.Mesh(
+    new THREE.SphereGeometry(0.24, 8, 7),
+    new THREE.MeshLambertMaterial({ color: rng.pick(SKIN) }),
+  );
   head.position.y = 1.72;
-  head.castShadow = true;
-  // Legs pivot at the hip: wrap each in a group at hip height.
-  const hipL = new THREE.Group();
-  hipL.position.set(-0.11, 0.78, 0);
-  legL.position.set(0, -0.39, 0);
-  hipL.add(legL);
-  const hipR = new THREE.Group();
-  hipR.position.set(0.11, 0.78, 0);
-  legR.position.set(0, -0.39, 0);
-  hipR.add(legR);
-  g.add(hipL, hipR, torso, head);
-  g.userData = { hipL, hipR, torso };
+  g.add(head);
   return g;
 }
 
-/** A random point on a sidewalk line beside a random street. */
-function sidewalkPoint() {
-  const c = pick(STREET_COORDS) + (rng() < 0.5 ? -10.6 : 10.6);
-  const along = rand(-208, 208);
-  return rng() < 0.5 ? { x: c, z: along } : { x: along, z: c };
-}
-
-class Ped {
-  constructor(scene, colliders) {
-    this.mesh = createPedMesh();
-    scene.add(this.mesh);
-    this.colliders = colliders;
-    this.pos = this.mesh.position;
-    const p = sidewalkPoint();
-    this.pos.set(p.x, 0, p.z);
-    this.heading = rand(0, Math.PI * 2);
-    this.state = 'stroll';
-    this.target = sidewalkPoint();
-    this.phase = rand(0, 6);
-    this.timer = 0;
-    this.fleeFrom = null;
-  }
-
-  /** Knocked down (by a car) or floored (by a punch). */
-  knockDown() {
-    if (this.state === 'down') return;
-    this.state = 'down';
-    this.timer = rand(4, 7);
-    this.mesh.rotation.x = -Math.PI / 2;
-    this.mesh.position.y = 0.25;
-  }
-
-  /** Start running from a point of danger. */
-  flee(x, z, seconds = 3.5) {
-    if (this.state === 'down') return;
-    this.state = 'flee';
-    this.fleeFrom = { x, z };
-    this.timer = seconds;
-  }
-
-  update(dt) {
-    if (this.state === 'down') {
-      this.timer -= dt;
-      if (this.timer <= 0) {
-        this.mesh.rotation.x = 0;
-        this.mesh.position.y = 0;
-        this.state = 'flee';
-        this.fleeFrom = { x: this.pos.x + rand(-1, 1), z: this.pos.z + rand(-1, 1) };
-        this.timer = 1.6;
-      }
-      return;
-    }
-    let speed = 1.6;
-    let tx;
-    let tz;
-    if (this.state === 'flee') {
-      this.timer -= dt;
-      const fx = this.fleeFrom ? this.pos.x - this.fleeFrom.x : 0;
-      const fz = this.fleeFrom ? this.pos.z - this.fleeFrom.z : 0;
-      const len = Math.hypot(fx, fz) || 1;
-      tx = this.pos.x + (fx / len) * 14;
-      tz = this.pos.z + (fz / len) * 14;
-      speed = 4.6;
-      if (this.timer <= 0) {
-        this.state = 'stroll';
-        this.target = sidewalkPoint();
-      }
-    } else {
-      tx = this.target.x;
-      tz = this.target.z;
-      if (Math.hypot(tx - this.pos.x, tz - this.pos.z) < 1.6) this.target = sidewalkPoint();
-    }
-    const desired = Math.atan2(tx - this.pos.x, tz - this.pos.z);
-    this.heading = turnToward(this.heading, desired, 3.4 * dt);
-    this.pos.x += Math.sin(this.heading) * speed * dt;
-    this.pos.z += Math.cos(this.heading) * speed * dt;
-    collideCircle(this.pos, 0.45, this.colliders);
-    // Walk cycle: legs swing, body bobs.
-    this.phase += dt * speed * 3.4;
-    const swing = Math.sin(this.phase) * 0.55;
-    this.mesh.userData.hipL.rotation.x = swing;
-    this.mesh.userData.hipR.rotation.x = -swing;
-    this.mesh.userData.torso.position.y = 1.14 + Math.abs(Math.sin(this.phase)) * 0.045;
-    this.mesh.rotation.y = this.heading;
-  }
-}
-
-export class PedestrianSystem {
-  constructor(scene, colliders) {
+export class Pedestrians {
+  constructor(scene, count = 18) {
+    this.scene = scene;
+    this.rng = makeRng(4242);
     this.peds = [];
-    for (let i = 0; i < 24; i++) this.peds.push(new Ped(scene, colliders));
+    for (let i = 0; i < count; i++) this.peds.push(this.spawn());
   }
 
-  /** The nearest standing pedestrian to a point, or null. */
-  nearest(x, z, maxDist) {
-    let best = null;
-    let bestD = maxDist;
-    for (const ped of this.peds) {
-      if (ped.state === 'down') continue;
-      const d = Math.hypot(ped.pos.x - x, ped.pos.z - z);
-      if (d < bestD) {
-        bestD = d;
-        best = ped;
-      }
-    }
-    return best;
+  spawn() {
+    const rng = this.rng;
+    // Walk the sidewalk ring of a random block.
+    const bi = rng.int(-3, 2), bj = rng.int(-3, 2);
+    const cx = (bi + 0.5) * PITCH, cz = (bj + 0.5) * PITCH;
+    const ring = PITCH / 2 - ROAD_HALF - 2.4;
+    const side = rng.int(0, 3);
+    const t = rng.next();
+    const mesh = makePedMesh(rng);
+    this.scene.add(mesh);
+    const ped = {
+      mesh, cx, cz, ring, side, t,
+      speed: rng.range(1.1, 1.9),
+      flee: 0, fleeFrom: null,
+      dead: false, deadTime: 0,
+      radius: 0.55,
+      get pos() { return mesh.position; },
+    };
+    this.place(ped);
+    return ped;
   }
 
-  /** Everyone within radius of a crime scene sees it and runs. */
-  witnessCrime(x, z, radius) {
-    let saw = false;
-    for (const ped of this.peds) {
-      if (ped.state === 'down') continue;
-      if (Math.hypot(ped.pos.x - x, ped.pos.z - z) < radius) {
-        ped.flee(x, z);
-        saw = true;
-      }
-    }
-    return saw;
+  place(ped) {
+    const { cx, cz, ring, side, t } = ped;
+    let x, z, angle;
+    const a = -ring + t * ring * 2;
+    if (side === 0) { x = cx + a; z = cz - ring; angle = Math.PI / 2; }
+    else if (side === 1) { x = cx + ring; z = cz + a; angle = Math.PI; }
+    else if (side === 2) { x = cx - a; z = cz + ring; angle = -Math.PI / 2; }
+    else { x = cx - ring; z = cz - a; angle = 0; }
+    ped.mesh.position.set(x, 0.25, z);
+    ped.mesh.rotation.y = angle;
+    ped.angle = angle;
   }
 
-  update(dt, playerPos, playerSpeed) {
+  scare(fromPos, radius = 26) {
     for (const ped of this.peds) {
-      // A fast car close by is reason enough to run, crime or not.
-      if (ped.state === 'stroll' && playerSpeed > 8) {
-        if (Math.hypot(ped.pos.x - playerPos.x, ped.pos.z - playerPos.z) < 8) {
-          ped.flee(playerPos.x, playerPos.z, 2.5);
-        }
-      }
-      ped.update(dt);
+      if (ped.dead) continue;
+      const d = Math.hypot(ped.pos.x - fromPos.x, ped.pos.z - fromPos.z);
+      if (d < radius) { ped.flee = 3; ped.fleeFrom = fromPos; }
     }
+  }
+
+  // Returns 'died' when this hit kills the pedestrian.
+  hurt(ped) {
+    if (ped.dead) return false;
+    ped.dead = true;
+    ped.deadTime = 0;
+    ped.mesh.rotation.x = Math.PI / 2;
+    ped.mesh.position.y = 0.3;
+    return true;
+  }
+
+  update(dt, hooks) {
+    for (const ped of this.peds) {
+      if (ped.dead) {
+        ped.deadTime += dt;
+        continue;
+      }
+      if (ped.flee > 0 && ped.fleeFrom) {
+        ped.flee -= dt;
+        const away = Math.atan2(ped.pos.x - ped.fleeFrom.x, ped.pos.z - ped.fleeFrom.z);
+        ped.mesh.position.x += Math.sin(away) * 4.6 * dt;
+        ped.mesh.position.z += Math.cos(away) * 4.6 * dt;
+        ped.mesh.position.x = clamp(ped.mesh.position.x, -200, 200);
+        ped.mesh.position.z = clamp(ped.mesh.position.z, -200, 200);
+        ped.mesh.rotation.y = away;
+        ped.mesh.position.y = 0.25 + Math.abs(Math.sin(performance.now() / 90)) * 0.08;
+        continue;
+      }
+      // Advance along the ring.
+      const perim = ped.ring * 2;
+      ped.t += (ped.speed * dt) / perim;
+      if (ped.t >= 1) { ped.t = 0; ped.side = (ped.side + 1) % 4; }
+      this.place(ped);
+      ped.mesh.position.y = 0.25 + Math.abs(Math.sin(performance.now() / 130)) * 0.05;
+    }
+    // Long-dead pedestrians get replaced by fresh walkers elsewhere.
+    for (let i = this.peds.length - 1; i >= 0; i--) {
+      const ped = this.peds[i];
+      if (ped.dead && ped.deadTime > 25) {
+        this.scene.remove(ped.mesh);
+        this.peds[i] = this.spawn();
+      }
+    }
+  }
+
+  reset() {
+    for (const ped of this.peds) this.scene.remove(ped.mesh);
+    this.peds = [];
+    for (let i = 0; i < 18; i++) this.peds.push(this.spawn());
+  }
+
+  dispose() {
+    for (const ped of this.peds) this.scene.remove(ped.mesh);
+    this.peds = [];
   }
 }

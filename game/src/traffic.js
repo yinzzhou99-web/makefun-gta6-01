@@ -1,177 +1,126 @@
-// traffic.js — the city's civilian cars: parked metal and moving traffic.
-//
-// Traffic drives the street grid on the right-hand side, waypoint to
-// waypoint: each car aims at a point on its lane past the next
-// intersection, picks straight/left/right when it gets there, and brakes
-// for anything in front of its nose. Parked cars sit at the kerb waiting
-// to be stolen; they are full Vehicles with the handbrake on, so a thief
-// can take one and a ram can shove one.
+// Traffic AI: civilian cars that cruise the road grid on right-hand lanes,
+// slow for the car ahead, and sometimes turn at intersections. Cars that
+// drift too far from the player are recycled to roads nearer the action.
 
-import * as THREE from 'three';
-import { STREET_COORDS, WORLD } from './city.js';
-import { CAR_COLORS, Vehicle } from './cars.js';
-import { angleDelta, clamp, pick, rand, rng } from './rng.js';
+import { ROAD_LINES } from './city.js';
+import { makeCar, driveCar, CAR_COLORS } from './cars.js';
+import { clamp, makeRng } from './rng.js';
 
-const LANE = 3.4; // lane offset from a street's centre line
+const LANE = 3.4;
 const CRUISE = 11.5;
 
-/** Right-hand offset for a travel direction (dx, dz): right = dir x up. */
-function laneOffset(dx, dz) {
-  return { x: -dz * LANE, z: dx * LANE };
-}
-
-/** The next street coordinate strictly ahead of `at` going `dir` (+1/-1). */
-function nextStreet(at, dir) {
-  const sorted = [...STREET_COORDS].sort((a, b) => (a - b) * dir);
-  for (const c of sorted) {
-    if ((c - at) * dir > 4) return c;
-  }
-  return sorted[sorted.length - 1];
-}
-
-class TrafficCar {
-  constructor(scene, colliders) {
-    this.vehicle = new Vehicle(scene, pick(CAR_COLORS), { maxSpeed: 26, accel: 13 });
-    this.colliders = colliders;
-    this.dir = { x: 0, z: 1 };
-    this.respawn({ x: 0, z: 0 }, true);
-  }
-
-  /** Put the car on a street some distance from the player, driving. */
-  respawn(playerPos, anywhere = false) {
-    for (let tries = 0; tries < 12; tries++) {
-      const alongZ = rng() < 0.5;
-      const street = pick(STREET_COORDS);
-      const along = rand(WORLD.minX + 14, WORLD.maxX - 14);
-      const x = alongZ ? street : along;
-      const z = alongZ ? along : street;
-      const d = Math.hypot(x - playerPos.x, z - playerPos.z);
-      if (!anywhere && (d < 55 || d > 190)) continue;
-      const s = rng() < 0.5 ? 1 : -1;
-      this.dir = alongZ ? { x: 0, z: s } : { x: s, z: 0 };
-      const off = laneOffset(this.dir.x, this.dir.z);
-      this.vehicle.place(x + off.x, z + off.z, Math.atan2(this.dir.x, this.dir.z));
-      this.planWaypoint();
-      return;
-    }
-    this.vehicle.place(0, -100, 0);
-    this.dir = { x: 0, z: 1 };
-    this.planWaypoint();
-  }
-
-  /** Aim at a point on our lane, past the next intersection ahead. */
-  planWaypoint() {
-    const p = this.vehicle.pos;
-    if (this.dir.z !== 0) {
-      const nz = nextStreet(p.z, this.dir.z);
-      this.waypoint = { x: p.x, z: nz + this.dir.z * 26 };
-      this.intersection = { x: STREET_COORDS.reduce((a, c) => (Math.abs(c - p.x) < Math.abs(a - p.x) ? c : a), STREET_COORDS[0]), z: nz };
-    } else {
-      const nx = nextStreet(p.x, this.dir.x);
-      this.waypoint = { x: nx + this.dir.x * 26, z: p.z };
-      this.intersection = { x: nx, z: STREET_COORDS.reduce((a, c) => (Math.abs(c - p.z) < Math.abs(a - p.z) ? c : a), STREET_COORDS[0]) };
-    }
-  }
-
-  /** At an intersection: pick a new direction (never a U-turn). */
-  chooseTurn() {
-    const roll = rng();
-    let nd = this.dir;
-    if (roll > 0.55) {
-      // Turn left or right relative to travel.
-      const side = roll > 0.78 ? 1 : -1;
-      nd = { x: this.dir.z * side, z: this.dir.x * side };
-    }
-    // Keep the turn inside the city: if the new heading leaves the grid
-    // from an edge street, go straight instead.
-    const edge = 192;
-    if ((nd.x > 0 && this.intersection.x >= edge) || (nd.x < 0 && this.intersection.x <= -edge)) nd = this.dir;
-    if ((nd.z > 0 && this.intersection.z >= edge) || (nd.z < 0 && this.intersection.z <= -edge)) nd = this.dir;
-    this.dir = nd;
-    // Aim across the intersection onto the new lane.
-    const off = laneOffset(nd.x, nd.z);
-    this.waypoint = {
-      x: this.intersection.x + off.x + nd.x * 26,
-      z: this.intersection.z + off.z + nd.z * 26,
-    };
-    this.turning = true;
-  }
-
-  update(dt, obstacles) {
-    const v = this.vehicle;
-    const p = v.pos;
-    const toI = Math.hypot(this.intersection.x - p.x, this.intersection.z - p.z);
-    if (!this.turning && toI < 13) this.chooseTurn();
-    if (this.turning && Math.hypot(this.waypoint.x - p.x, this.waypoint.z - p.z) < 9) {
-      this.turning = false;
-      this.planWaypoint();
-    }
-
-    const desired = Math.atan2(this.waypoint.x - p.x, this.waypoint.z - p.z);
-    const steer = clamp(angleDelta(v.heading, desired) * 1.7, -1, 1);
-
-    // Brake for anything ahead: other cars, the player, a body in the road.
-    let throttle = 0.55;
-    const fwdX = Math.sin(v.heading);
-    const fwdZ = Math.cos(v.heading);
-    for (const o of obstacles) {
-      const dx = o.x - p.x;
-      const dz = o.z - p.z;
-      const ahead = dx * fwdX + dz * fwdZ;
-      if (ahead < 0.5 || ahead > 11) continue;
-      const side = Math.abs(dx * fwdZ - dz * fwdX);
-      if (side > 2.8) continue;
-      throttle = ahead < 5.5 ? -0.7 : 0.05;
-      break;
-    }
-    if (Math.abs(angleDelta(v.heading, desired)) > 0.55 && v.speed > 6.5) throttle = Math.min(throttle, 0);
-    if (v.health <= 0) throttle = -0.4; // a wreck coasts to a stop
-    v.update(dt, { throttle, steer, handbrake: false }, this.colliders);
-  }
-}
-
-export class TrafficSystem {
-  constructor(scene, colliders) {
+export class Traffic {
+  constructor(scene, count = 13) {
     this.scene = scene;
-    this.colliders = colliders;
+    this.rng = makeRng(777);
     this.cars = [];
-    for (let i = 0; i < 14; i++) this.cars.push(new TrafficCar(scene, colliders));
-    // Parked cars at kerbs, ready to steal.
-    this.parked = [];
-    for (let i = 0; i < 16; i++) {
-      const car = new Vehicle(scene, pick(CAR_COLORS), { maxSpeed: 34, accel: 17 });
-      car.parked = true;
-      const alongZ = rng() < 0.5;
-      const street = pick(STREET_COORDS);
-      const along = rand(WORLD.minX + 16, 200);
-      const side = rng() < 0.5 ? -6.4 : 6.4;
-      if (alongZ) car.place(street + side, along, side < 0 ? Math.PI : 0);
-      else car.place(along, street + side, side < 0 ? -Math.PI / 2 : Math.PI / 2);
-      this.parked.push(car);
+    for (let i = 0; i < count; i++) this.cars.push(this.spawn(null, true));
+  }
+
+  spawn(nearPos, anywhere = false) {
+    const rng = this.rng;
+    const axis = rng.chance(0.5) ? 'x' : 'z';
+    const dir = rng.chance(0.5) ? 1 : -1;
+    const line = rng.pick(ROAD_LINES);
+    let along = rng.range(-190, 190);
+    if (!anywhere && nearPos) {
+      // Respawn ahead of the player, out of immediate sight.
+      along = rng.range(90, 170) * (rng.chance(0.5) ? 1 : -1);
+      along += axis === 'x' ? nearPos.x : nearPos.z;
+      along = clamp(along, -195, 195);
     }
+    let x, z;
+    if (axis === 'z') { x = line - dir * LANE; z = along; }
+    else { z = line + dir * LANE; x = along; }
+    const car = makeCar(this.scene, rng.pick(CAR_COLORS), x, z, this.heading(axis, dir), 'traffic');
+    car.ai = { axis, dir, line, turnCool: this.rng.range(1, 4), cruise: CRUISE * this.rng.range(0.8, 1.15) };
+    return car;
   }
 
-  /** Every civilian vehicle, moving or parked (for collisions and theft). */
-  allVehicles() {
-    return [...this.cars.map((c) => c.vehicle), ...this.parked];
+  heading(axis, dir) {
+    if (axis === 'z') return dir > 0 ? 0 : Math.PI;
+    return dir > 0 ? Math.PI / 2 : -Math.PI / 2;
   }
 
-  /** Remove a car from the world entirely (it was stolen or wrecked). */
-  take(vehicle) {
-    const ti = this.cars.findIndex((c) => c.vehicle === vehicle);
-    if (ti >= 0) {
-      this.cars.splice(ti, 1);
-      return;
-    }
-    const pi = this.parked.indexOf(vehicle);
-    if (pi >= 0) this.parked.splice(pi, 1);
-  }
-
-  update(dt, playerPos, obstacles) {
+  update(dt, focusPos, allCars) {
     for (const car of this.cars) {
-      const d = Math.hypot(car.vehicle.pos.x - playerPos.x, car.vehicle.pos.z - playerPos.z);
-      if (d > 250) car.respawn(playerPos);
-      car.update(dt, obstacles);
+      if (car.dead) continue;
+      const ai = car.ai;
+      // Waypoint: a point ahead on the current lane.
+      let wx, wz;
+      if (ai.axis === 'z') { wx = ai.line - ai.dir * LANE; wz = car.pos.z + ai.dir * 22; }
+      else { wz = ai.line + ai.dir * LANE; wx = car.pos.x + ai.dir * 22; }
+      const targetAngle = Math.atan2(wx - car.pos.x, wz - car.pos.z);
+      let diff = targetAngle - car.angle;
+      while (diff > Math.PI) diff -= Math.PI * 2;
+      while (diff < -Math.PI) diff += Math.PI * 2;
+      const steer = clamp(diff * 1.8, -1, 1);
+
+      // Slow down when something is close ahead.
+      let throttle = car.speed < ai.cruise ? 0.75 : 0;
+      for (const other of allCars) {
+        if (other === car || other.dead) continue;
+        const dx = other.pos.x - car.pos.x, dz = other.pos.z - car.pos.z;
+        const ahead = dx * Math.sin(car.angle) + dz * Math.cos(car.angle);
+        const side = Math.abs(dx * Math.cos(car.angle) - dz * Math.sin(car.angle));
+        if (ahead > 0 && ahead < 10 && side < 2.4) { throttle = car.speed > 3 ? -0.7 : 0; break; }
+      }
+
+      driveCar(car, { throttle, steer }, dt);
+
+      // Turning at intersections.
+      ai.turnCool -= dt;
+      const crossCoord = ai.axis === 'z' ? car.pos.z : car.pos.x;
+      const nearLine = ROAD_LINES.find((l) => Math.abs(crossCoord - l) < 2.2);
+      if (nearLine !== undefined && ai.turnCool <= 0 && this.rng.chance(0.45)) {
+        ai.axis = ai.axis === 'z' ? 'x' : 'z';
+        ai.dir = this.rng.chance(0.5) ? 1 : -1;
+        ai.line = nearLine;
+        ai.turnCool = 4;
+      }
+      // Fell off the world edge: loop back.
+      if (Math.abs(car.pos.x) > 205 || Math.abs(car.pos.z) > 205) {
+        ai.dir *= -1;
+      }
+      // Recycle far-away cars toward the player.
+      const d = Math.hypot(car.pos.x - focusPos.x, car.pos.z - focusPos.z);
+      if (d > 250) {
+        const fresh = this.spawn(focusPos);
+        this.scene.remove(car.mesh);
+        car.mesh = fresh.mesh;
+        car.pos.copy(fresh.pos);
+        car.angle = fresh.angle; car.speed = 0; car.ai = fresh.ai;
+        car.mesh.rotation.y = car.angle;
+      }
     }
+  }
+
+  // Re-acquire a lane for a car the player just stepped out of on a road:
+  // snap it to the nearest road line and send it on its way.
+  adopt(car) {
+    let line = ROAD_LINES[0], best = Infinity, vertical = true;
+    for (const l of ROAD_LINES) {
+      const dv = Math.abs(car.pos.x - l);
+      if (dv < best) { best = dv; line = l; vertical = true; }
+      const dh = Math.abs(car.pos.z - l);
+      if (dh < best) { best = dh; line = l; vertical = false; }
+    }
+    const axis = vertical ? 'z' : 'x';
+    const fx = Math.sin(car.angle), fz = Math.cos(car.angle);
+    const dir = axis === 'z' ? (fz >= 0 ? 1 : -1) : (fx >= 0 ? 1 : -1);
+    car.ai = { axis, dir, line, turnCool: 2.5, cruise: CRUISE };
+    return car;
+  }
+
+  reset() {
+    for (const car of this.cars) this.scene.remove(car.mesh);
+    this.cars = [];
+    const count = 13;
+    for (let i = 0; i < count; i++) this.cars.push(this.spawn(null, true));
+  }
+
+  dispose() {
+    for (const car of this.cars) this.scene.remove(car.mesh);
+    this.cars = [];
   }
 }

@@ -1,78 +1,68 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Port Azura Heat — an open-world crime game</title>
+<title>Port Azura Heat</title>
 <link rel="icon" href="data:,">
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="./style.css">
 <script type="importmap">
 { "imports": { "three": "./vendor/three/three.module.min.js" } }
 </script>
 </head>
 <body>
-<div id="app"></div>
+<div id="app">
+  <canvas id="gl"></canvas>
 
-<div id="hud">
-  <div id="topleft">
-    <div id="cash">$0</div>
-    <div id="debtbar"><div id="debtfill"></div><span id="debt-done">★</span></div>
-    <div id="debttext">DEBT $0 / $5,000</div>
-  </div>
-
-  <div id="stars">☆☆☆☆☆</div>
-
-  <div id="mission">
-    <div id="mission-title">COURIER RUN</div>
-    <div id="mission-sub">Reach the gold beacon</div>
-    <div id="timertrack"><div id="timerfill"></div></div>
-  </div>
-
-  <canvas id="minimap" width="184" height="184"></canvas>
-
-  <div id="speedo">
-    <div><span id="speed-val">0</span><span id="speed-unit">km/h</span></div>
-    <div id="healthtrack"><div id="healthfill"></div></div>
-  </div>
-
-  <div id="bustwrap"><div id="bustlabel">BUSTED</div><div id="busttrack"><div id="bustfill"></div></div></div>
-
-  <div id="prompt"></div>
-  <div id="toast"></div>
-  <div id="hint">WASD move · E car · F punch · Shift sprint · Space handbrake · M mute</div>
-</div>
-
-<div id="title-screen" class="overlay">
-  <div class="panel">
-    <div class="kicker">PORT AZURA · ONE NIGHT · ONE DEBT</div>
-    <h1>PORT AZURA <span>HEAT</span></h1>
-    <p class="story">Rook runs packages for the Marlin Crew, and tonight the debt comes due:
-      <strong>$5,000 by sunrise.</strong> Steal cars, chase the gold beacons, keep the
-      Azura PD off your tail — and when the stars pile up, Milo's chop shop out west
-      washes the heat away for cash. The city is yours. The clock is not.</p>
-    <div class="controls">
-      <div><b>WASD</b> move / drive</div>
-      <div><b>Mouse</b> look</div>
-      <div><b>E</b> steal / leave car</div>
-      <div><b>F</b> punch &amp; mug</div>
-      <div><b>Shift</b> sprint</div>
-      <div><b>Space</b> handbrake</div>
-      <div><b>M</b> mute</div>
-      <div><b>R</b> restart</div>
+  <div id="hud" class="hidden">
+    <div id="hud-top-left">
+      <div id="health-wrap"><div id="health-bar"></div></div>
+      <div id="cash">$0</div>
+      <div id="stars"></div>
     </div>
-    <div class="play">CLICK TO PLAY</div>
-    <div id="best-haul">No haul yet — the crew is waiting.</div>
+    <div id="objective-wrap">
+      <div id="objective-title">FREE ROAM</div>
+      <div id="objective-text">Explore Port Azura.</div>
+      <div id="objective-timer"></div>
+    </div>
+    <div id="hud-bottom-right">
+      <canvas id="minimap" width="168" height="168"></canvas>
+      <div id="speed"></div>
+    </div>
+    <div id="toast"></div>
+    <div id="prompt"></div>
+  </div>
+
+  <div id="screen-start" class="screen">
+    <h1>PORT AZURA <span>HEAT</span></h1>
+    <p class="tagline">One courier. One debt. One sunrise deadline.</p>
+    <p class="story">Marlo Venn owes the Marlin Crew $1,500 by sunrise. Work the
+      beacons, steal what rolls, and don't let Azura PD pin you down.</p>
+    <div class="controls">
+      <div><b>W A S D</b> walk / drive</div>
+      <div><b>Shift</b> run</div>
+      <div><b>E</b> enter / exit car</div>
+      <div><b>Mouse + Click</b> aim &amp; fire pistol</div>
+      <div><b>P / Esc</b> pause</div>
+      <div><b>R</b> restart after a bust</div>
+      <div><b>M</b> mute</div>
+    </div>
+    <button id="btn-start">START ENGINE</button>
+    <p id="best-line"></p>
+  </div>
+
+  <div id="screen-pause" class="screen hidden">
+    <h1>PAUSED</h1>
+    <p>Press P or Esc to keep rolling.</p>
+  </div>
+
+  <div id="screen-over" class="screen hidden">
+    <h1 id="over-title">BUSTED</h1>
+    <p id="over-detail"></p>
+    <p id="over-stats"></p>
+    <p class="blink">Press R to run it back</p>
   </div>
 </div>
-
-<div id="end-screen" class="overlay" style="display:none">
-  <div class="panel">
-    <h1 id="end-title">BUSTED</h1>
-    <p id="end-stats" class="story"></p>
-    <div class="play">PRESS R TO RUN IT BACK</div>
-  </div>
-</div>
-
-<script type="module" src="src/main.js"></script>
+<script type="module" src="./src/main.js"></script>
 </body>
 </html>
