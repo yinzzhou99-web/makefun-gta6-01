@@ -1,8 +1,8 @@
 # Port Azura Heat
 
-[![make.fun](https://make.fun/api/badges/competition/gta6-01)](https://make.fun/bounty/gta6-01)
-[![rank](https://make.fun/badge/gta6-01/yinzzhou99-web/makefun-gta6-01/rank.svg)](https://make.fun/bounty/gta6-01/leaderboard)
-[![reward](https://make.fun/badge/gta6-01/yinzzhou99-web/makefun-gta6-01/reward.svg)](https://make.fun/bounty/gta6-01)
+[![make.fun · gta6-01](https://make.fun/badge/gta6-01.svg)](https://make.fun/bounty/gta6-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
+[![rank](https://make.fun/badge/gta6-01/yinzzhou99-web/makefun-gta6-01/rank.svg)](https://make.fun/bounty/gta6-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
+[![reward](https://make.fun/badge/gta6-01/yinzzhou99-web/makefun-gta6-01/reward.svg)](https://make.fun/bounty/gta6-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
 
 **Port Azura Heat** is an original open-world crime game that runs entirely in
 the browser, offline, from its own files. You are Marlo Venn, a wheelman who
