@@ -106,7 +106,7 @@ export class PoliceSystem {
 
     // Drop hunt state for cruisers disposed of from outside (a restart).
     if (this.state.size > this.cruisers.length) {
-      for (const car of [...this.state.keys]) {
+      for (const car of [...this.state.keys()]) {
         if (!this.cruisers.includes(car)) this.state.delete(car);
       }
     }
